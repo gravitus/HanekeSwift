@@ -23,7 +23,7 @@ extension HanekeGlobals {
     public struct Cache {
         
         public static let OriginalFormatName = "original"
-
+        
         public enum ErrorCode : Int {
             case objectNotFound = -100
             case formatNotFound = -101
@@ -31,6 +31,91 @@ extension HanekeGlobals {
         
     }
     
+}
+
+class MemoryCache: NSObject  {
+    let cache: NSCache<AnyObject, ObjectWrapper>
+    let accessHistory: NSMutableDictionary
+    let keys: NSMutableArray
+    var numObjects: Int
+    let maxNumObjects: Int
+    
+    init(maxNumObjects: Int) {
+        cache = NSCache<AnyObject, ObjectWrapper>()
+        accessHistory = NSMutableDictionary()
+        keys = NSMutableArray()
+        numObjects = 0
+        self.maxNumObjects = maxNumObjects
+    }
+    
+    private func maybeCollectGarbage() {
+        while numObjects > maxNumObjects {
+            self.popOldestElement()
+        }
+    }
+    
+    private func popOldestElement() {
+        var oldestKey: AnyObject? = nil
+        var oldestDate: Date = Date()
+        for key in keys {
+            let date = accessHistory[key] as! Date
+            if date.compare(oldestDate) == .orderedAscending {
+                oldestDate = date
+                oldestKey = key as AnyObject
+            }
+        }
+        
+        if let key = oldestKey {
+            numObjects -= 1
+            cache.removeObject(forKey: key)
+            accessHistory.removeObject(forKey: key)
+            keys.remove(key)
+        }
+    }
+    
+    private func heapSize(_ obj: ObjectWrapper) -> Int {
+        return malloc_size(Unmanaged.passRetained(obj.hnk_value as AnyObject).toOpaque())
+    }
+    
+    func object(forKey key: AnyObject) -> ObjectWrapper? {
+        if let obj = cache.object(forKey: key) {
+            accessHistory.removeObject(forKey: key)
+            accessHistory[key] = Date()
+            return obj
+        } else {
+            return nil
+        }
+    }
+    
+    func removeAllObjects() {
+        cache.removeAllObjects()
+        accessHistory.removeAllObjects()
+        keys.removeAllObjects()
+        numObjects = 0
+    }
+    
+    func removeObject(forKey key: AnyObject) {
+        if let obj = object(forKey: key) {
+            numObjects -= 1
+            cache.removeObject(forKey: key)
+            accessHistory.removeObject(forKey: key)
+            keys.remove(key)
+        }
+    }
+    
+    func setObject(_ obj: ObjectWrapper, forKey key: AnyObject) {
+        if let oldObject = self.object(forKey: key) {
+            numObjects -= heapSize(oldObject)
+            keys.remove(key)
+        }
+        
+        cache.setObject(obj, forKey: key)
+        keys.add(key)
+        numObjects += 1
+        accessHistory[key] = Date()
+        
+        maybeCollectGarbage()
+    }
 }
 
 open class Cache<T: DataConvertible> where T.Result == T, T : DataRepresentable {
@@ -45,10 +130,10 @@ open class Cache<T: DataConvertible> where T.Result == T, T : DataRepresentable 
         let notifications = NotificationCenter.default
         // Using block-based observer to avoid subclassing NSObject
         memoryWarningObserver = notifications.addObserver(forName: Notification.Name.UIApplicationDidReceiveMemoryWarning,
-            object: nil,
-            queue: OperationQueue.main,
-            using: { [unowned self] (notification : Notification!) -> Void in
-                self.onMemoryWarning()
+                                                          object: nil,
+                                                          queue: OperationQueue.main,
+                                                          using: { [unowned self] (notification : Notification!) -> Void in
+                                                            self.onMemoryWarning()
             }
         )
         
@@ -78,18 +163,18 @@ open class Cache<T: DataConvertible> where T.Result == T, T : DataRepresentable 
     @discardableResult open func fetch(key: String, formatName: String = HanekeGlobals.Cache.OriginalFormatName, failure fail : Fetch<T>.Failer? = nil, success succeed : Fetch<T>.Succeeder? = nil) -> Fetch<T> {
         let fetch = Cache.buildFetch(failure: fail, success: succeed)
         if let (format, memoryCache, diskCache) = self.formats[formatName] {
-            if let wrapper = memoryCache.object(forKey: key as AnyObject) as? ObjectWrapper, let result = wrapper.hnk_value as? T {
+            if let wrapper = memoryCache.object(forKey: key as AnyObject), let result = wrapper.hnk_value as? T {
                 fetch.succeed(result)
                 diskCache.updateAccessDate(self.dataFromValue(result, format: format), key: key)
                 return fetch
             }
-
+            
             self.fetchFromDiskCache(diskCache, key: key, memoryCache: memoryCache, failure: { error in
                 fetch.fail(error)
             }) { value in
                 fetch.succeed(value)
             }
-
+            
         } else {
             let localizedFormat = NSLocalizedString("Format %@ not found", comment: "Error description")
             let description = String(format:localizedFormat, formatName)
@@ -103,7 +188,7 @@ open class Cache<T: DataConvertible> where T.Result == T, T : DataRepresentable 
         let key = fetcher.key
         let fetch = Cache.buildFetch(failure: fail, success: succeed)
         self.fetch(key: key, formatName: formatName, failure: { error in
-            if (error as NSError?)?.code == HanekeGlobals.Cache.ErrorCode.formatNotFound.rawValue {
+            if (error as? NSError)?.code == HanekeGlobals.Cache.ErrorCode.formatNotFound.rawValue {
                 fetch.fail(error)
             }
             
@@ -121,7 +206,7 @@ open class Cache<T: DataConvertible> where T.Result == T, T : DataRepresentable 
         }
         return fetch
     }
-
+    
     open func remove(key: String, formatName: String = HanekeGlobals.Cache.OriginalFormatName) {
         if let (_, memoryCache, diskCache) = self.formats[formatName] {
             memoryCache.removeObject(forKey: key as AnyObject)
@@ -156,9 +241,9 @@ open class Cache<T: DataConvertible> where T.Result == T, T : DataRepresentable 
             }
         }
     }
-
+    
     // MARK: Size
-
+    
     open var size: UInt64 {
         var size: UInt64 = 0
         for (_, (_, _, diskCache)) in self.formats {
@@ -166,7 +251,7 @@ open class Cache<T: DataConvertible> where T.Result == T, T : DataRepresentable 
         }
         return size
     }
-
+    
     // MARK: Notifications
     
     func onMemoryWarning() {
@@ -176,13 +261,13 @@ open class Cache<T: DataConvertible> where T.Result == T, T : DataRepresentable 
     }
     
     // MARK: Formats
-
-    public var formats : [String : (Format<T>, NSCache<AnyObject, AnyObject>, DiskCache)] = [:]
+    
+    var formats : [String : (Format<T>, MemoryCache, DiskCache)] = [:]
     
     open func addFormat(_ format : Format<T>) {
         let name = format.name
         let formatPath = self.formatPath(withFormatName: name)
-        let memoryCache = NSCache<AnyObject, AnyObject>()
+        let memoryCache = MemoryCache(maxNumObjects: 50)
         let diskCache = DiskCache(path: formatPath, capacity : format.diskCapacity)
         self.formats[name] = (format, memoryCache, diskCache)
     }
@@ -214,10 +299,10 @@ open class Cache<T: DataConvertible> where T.Result == T, T : DataRepresentable 
         return value.asData()
     }
     
-    fileprivate func fetchFromDiskCache(_ diskCache : DiskCache, key: String, memoryCache : NSCache<AnyObject, AnyObject>, failure fail : ((Error?) -> ())?, success succeed : @escaping (T) -> ()) {
+    fileprivate func fetchFromDiskCache(_ diskCache : DiskCache, key: String, memoryCache : MemoryCache, failure fail : ((Error?) -> ())?, success succeed : @escaping (T) -> ()) {
         diskCache.fetchData(key: key, failure: { error in
             if let block = fail {
-                if (error as NSError?)?.code == NSFileReadNoSuchFileError {
+                if (error as? NSError)?.code == NSFileReadNoSuchFileError {
                     let localizedFormat = NSLocalizedString("Object not found for key %@", comment: "Error description")
                     let description = String(format:localizedFormat, key)
                     let error = errorWithCode(HanekeGlobals.Cache.ErrorCode.objectNotFound.rawValue, description: description)
@@ -272,6 +357,7 @@ open class Cache<T: DataConvertible> where T.Result == T, T : DataRepresentable 
     }
     
     fileprivate func decompressedImageIfNeeded(_ value : T) -> T {
+        assert(!Thread.current.isMainThread)
         if let image = value as? UIImage {
             let decompressedImage = image.hnk_decompressedImage() as? T
             return decompressedImage!

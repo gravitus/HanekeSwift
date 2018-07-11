@@ -19,9 +19,9 @@ open class DiskCache {
     }
     
     open let path: String
-
+    
     open var size : UInt64 = 0
-
+    
     open var capacity : UInt64 = 0 {
         didSet {
             self.cacheQueue.async(execute: {
@@ -29,7 +29,7 @@ open class DiskCache {
             })
         }
     }
-
+    
     open lazy var cacheQueue : DispatchQueue = {
         let queueName = HanekeGlobals.Domain + "." + (self.path as NSString).lastPathComponent
         let cacheQueue = DispatchQueue(label: queueName, attributes: [])
@@ -55,7 +55,7 @@ open class DiskCache {
         })
     }
     
-    open func fetchData(key: String, failure fail: ((Error?) -> ())? = nil, success succeed: @escaping (Data) -> ()) {
+    @discardableResult open func fetchData(key: String, failure fail: ((Error?) -> ())? = nil, success succeed: @escaping (Data) -> ()) {
         cacheQueue.async {
             let path = self.path(forKey: key)
             do {
@@ -73,7 +73,7 @@ open class DiskCache {
             }
         }
     }
-
+    
     open func removeData(with key: String) {
         cacheQueue.async(execute: {
             let path = self.path(forKey: key)
@@ -106,7 +106,7 @@ open class DiskCache {
             }
         })
     }
-
+    
     open func updateAccessDate( _ getData: @autoclosure @escaping () -> Data?, key: String) {
         cacheQueue.async(execute: {
             let path = self.path(forKey: key)
@@ -120,7 +120,7 @@ open class DiskCache {
             }
         })
     }
-
+    
     open func path(forKey key: String) -> String {
         let escapedFilename = key.escapedFilename()
         let filename = escapedFilename.characters.count < Int(NAME_MAX) ? escapedFilename : key.MD5Filename()
@@ -161,7 +161,7 @@ open class DiskCache {
         fileManager.enumerateContentsOfDirectory(atPath: cachePath, orderedByProperty: URLResourceKey.contentModificationDateKey.rawValue, ascending: true) { (URL : URL, _, stop : inout Bool) -> Void in
             
             self.removeFile(atPath: URL.path)
-
+            
             stop = self.size <= self.capacity
         }
     }
@@ -218,7 +218,7 @@ open class DiskCache {
             }
         }
     }
-
+    
     fileprivate func substract(size : UInt64) {
         if (self.size >= size) {
             self.size -= size

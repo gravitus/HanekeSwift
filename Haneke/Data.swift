@@ -25,7 +25,7 @@ private let imageSync = NSLock()
 extension UIImage : DataConvertible, DataRepresentable {
     
     public typealias Result = UIImage
-
+    
     // HACK: UIImage data initializer is no longer thread safe. See: https://github.com/AFNetworking/AFNetworking/issues/2572#issuecomment-115854482
     static func safeImageWithData(_ data:Data) -> Result? {
         imageSync.lock()
@@ -53,7 +53,7 @@ extension String : DataConvertible, DataRepresentable {
     
     public static func convertFromData(_ data: Data) -> Result? {
         let string = NSString(data: data, encoding: String.Encoding.utf8.rawValue)
-        return string as Result?
+        return string as? Result
     }
     
     public func asData() -> Data! {
